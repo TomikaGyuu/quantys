@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  sage_x3_app:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./uploads:/app/uploads
+      - ./processed:/app/processed
+      - ./final:/app/final
+      - ./archive:/app/archive
+      - ./logs:/app/logs
+      - ./database:/app/database
+    environment:
+      - FLASK_ENV=production
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_URL=sqlite:///database/sage_x3.db
+      - SESSION_EXPIRY_HOURS=24
+      - CLEANUP_INTERVAL_MINUTES=60
+      - MAX_FILE_SIZE=16777216
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  celery_worker:
+    build: .
+    command: celery -A app.celery worker --loglevel=info --concurrency=4
+    volumes:
+      - ./uploads:/app/uploads
+      - ./processed:/app/processed
+      - ./final:/app/final
+      - ./archive:/app/archive
+      - ./logs:/app/logs
+      - ./database:/app/database
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_URL=sqlite:///database/sage_x3.db
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  celery_beat:
+    build: .
+    command: celery -A app.celery beat --loglevel=info
+    volumes:
+      - ./logs:/app/logs
+      - ./database:/app/database
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - DATABASE_URL=sqlite:///database/sage_x3.db
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  flower:
+    build: .
+    command: celery -A app.celery flower --port=5555
+    ports:
+      - "5555:5555"
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  redis_data:
